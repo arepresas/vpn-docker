@@ -1,0 +1,202 @@
+name: vpn
+
+services:
+  homer:
+    image: b4bz/homer:latest
+    container_name: homer
+    depends_on:
+      - pihole
+    volumes:
+      - ./homer-assets:/www/assets:ro
+    ports:
+      - "${HOMER_PORT}:8080/tcp"
+    dns:
+      - 10.14.0.2
+      - 1.1.1.1
+    networks:
+      vpn:
+        ipv4_address: 10.14.0.1
+    restart: unless-stopped
+
+  pihole:
+    image: pihole/pihole:latest
+    container_name: pihole
+    hostname: pihole
+    environment:
+      - TZ=${TZ}
+      - FTLCONF_webserver_api_password=${PIHOLE_PASSWORD}
+      - FTLCONF_dns_listeningMode=ALL
+      - FTLCONF_dns_upstreams=1.1.1.1;1.0.0.1;8.8.8.8
+    volumes:
+      - ./pihole-etc:/etc/pihole
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "${PIHOLE_WEB_PORT}:80/tcp"
+      - "${PIHOLE_HTTPS_PORT}:443/tcp"
+    networks:
+      vpn:
+        ipv4_address: 10.14.0.2
+    restart: unless-stopped
+
+  chrome:
+    image: lscr.io/linuxserver/chromium:latest
+    container_name: chrome
+    depends_on:
+      - pihole
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - TITLE=${CHROME_TITLE}
+      - CHROME_CLI=--no-sandbox --disable-gpu --disable-dev-shm-usage
+    volumes:
+      - ./chrome-config:/config
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+    shm_size: "1gb"
+    dns:
+      - 10.14.0.2
+      - 1.1.1.1
+    networks:
+      vpn:
+        ipv4_address: 10.14.0.3
+    restart: unless-stopped
+
+  wgeasy:
+    image: ghcr.io/wg-easy/wg-easy:15
+    container_name: wgeasy
+    depends_on:
+      - pihole
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      # LAN-only UI without TLS (v15 refuses login over plain HTTP otherwise).
+      # Never expose the UI port on the router; for internet-facing UI use a
+      # reverse proxy with HTTPS instead and drop INSECURE.
+      - INSECURE=true
+    volumes:
+      - ./wgeasy-data:/etc/wireguard
+      - /lib/modules:/lib/modules:ro
+    ports:
+      - "${SERVERPORT}:51821/udp"
+      - "${WGEASY_UI_PORT}:51821/tcp"
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv4.ip_forward=1
+    dns:
+      - 10.14.0.2
+      - 1.1.1.1
+    networks:
+      vpn:
+        ipv4_address: 10.14.0.12
+    restart: unless-stopped
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    command: -H unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./portainer-data:/data
+    ports:
+      - "${PORTAINER_EDGE_PORT}:8000/tcp"
+      - "${PORTAINER_PORT}:9443/tcp"
+    dns:
+      - 10.14.0.2
+      - 1.1.1.1
+    networks:
+      vpn:
+        ipv4_address: 10.14.0.5
+    restart: unless-stopped
+
+  wetty:
+    image: wettyoss/wetty:latest
+    container_name: wetty
+    depends_on:
+      - pihole
+    command:
+      - --ssh-host=${WETTY_SSH_HOST}
+      - --ssh-port=22
+      - --ssh-user=${WETTY_SSH_USER}
+      - --ssh-auth=password
+      - --title=Homelab-SSH
+      - --ssl-key=/ssl/key.pem
+      - --ssl-cert=/ssl/cert.pem
+    volumes:
+      - ./wetty-ssl:/ssl:ro
+    ports:
+      - "${WETTY_PORT}:3000/tcp"
+    dns:
+      - 10.14.0.2
+      - 1.1.1.1
+    networks:
+      vpn:
+        ipv4_address: 10.14.0.6
+    restart: unless-stopped
+
+  kuma:
+    image: louislam/uptime-kuma:2
+    container_name: kuma
+    depends_on:
+      - pihole
+    volumes:
+      - ./kuma-data:/app/data
+    ports:
+      - "${KUMA_PORT}:3001/tcp"
+    dns:
+      - 10.14.0.2
+      - 1.1.1.1
+    networks:
+      vpn:
+        ipv4_address: 10.14.0.9
+    restart: unless-stopped
+
+  backrest:
+    image: garethgeorge/backrest:latest
+    container_name: backrest
+    depends_on:
+      - pihole
+    environment:
+      - TZ=${TZ}
+    volumes:
+      - ./backrest-data:/data
+      - ./backrest-repos:/repos
+      - ./:/backup/stack:ro
+    ports:
+      - "${BACKREST_PORT}:9898/tcp"
+    dns:
+      - 10.14.0.2
+      - 1.1.1.1
+    networks:
+      vpn:
+        ipv4_address: 10.14.0.10
+    restart: unless-stopped
+
+  filebrowser:
+    image: filebrowser/filebrowser:latest
+    container_name: filebrowser
+    depends_on:
+      - pihole
+    volumes:
+      - ./filebrowser-srv:/srv
+    ports:
+      - "${FILEBROWSER_PORT}:80/tcp"
+    dns:
+      - 10.14.0.2
+      - 1.1.1.1
+    networks:
+      vpn:
+        ipv4_address: 10.14.0.11
+    restart: unless-stopped
+
+networks:
+  vpn:
+    name: vpn
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.14.0.0/24
+          gateway: 10.14.0.254
